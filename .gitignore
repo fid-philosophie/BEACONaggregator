@@ -1,0 +1,20 @@
+# --- Environments ---
+.venv/
+venv/
+
+# --- Python Cache ---
+__pycache__/
+*.py[cod]
+
+# --- VS Code ---
+.vscode/
+
+# --- Test/Type/Build Caches ---
+.pytest_cache/
+.mypy_cache/
+*.log
+dist/
+build/
+
+# --- Project-specific data ---
+data/
