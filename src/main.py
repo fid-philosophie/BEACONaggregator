@@ -14,11 +14,9 @@ from datetime import datetime
 from typing import Optional, Sequence, Any, Dict, Union, List
 from collections import defaultdict
 
-from handle_parquets import inspect_parquet_with_duckdb, qident, look_into_parquet
+from handle_parquets import inspect_parquet_with_duckdb, qident, look_into_parquet, merge_parquets
 from helpers import make_safe_prefix
-from beacons import download_beacon_file, parse_beacon_file, load_beacon_list, collect_beacons_to_dataframe, iter_beacon_dataframes
-
-
+from beacons import download_beacon_file, parse_beacon_file, load_beacon_list, collect_beacons_to_dataframe, iter_beacon_dataframes, EXPECTED_COLUMNS
 
 
 def add_contains_matches_and_dump_json(
@@ -307,38 +305,67 @@ def sample_parquet_dir(
     return samples
 
 
-
 def create_resolved_parquets(parquet_paths):
     for path in parquet_paths:
         actualpath = Path(path)
         name = actualpath.name
 
-        resolved_expr = None  # IMPORTANT: reset every loop iteration
+        resolved_expr = None      # reset each loop
+        target_id_expr = None
+        authority_id_expr = None
+        id_col = None
 
-        # Decide which column provides the ID/value
+        # Decide which column provides the ID/value + build target_id/authority_id
         if "target-notnull" in name and "col1-2-3" in name:
-            id_col = "col3"
+            #id_col = "col3"
+            id_col = "col1"
+            target_id_expr = "col3"
+            authority_id_expr = "col1"
+
         elif "target-notnull" in name and "col1-2" in name:
             id_col = "col1"
+            target_id_expr = "col1"
+            authority_id_expr = "col1"
+
         elif "target-notnull" in name and "col1-only" in name:
             id_col = "col1"
+            target_id_expr = "col1"
+            authority_id_expr = "col1"
+
         elif "target-null" in name and "col1-2-3" in name:
             resolved_expr = "col3"
+            # last part after last "/"
+            target_id_expr = "regexp_extract(col3, '([^/]+)$', 1)"
+            authority_id_expr = "col1"
+
         elif "target-null" in name and "col1-2" in name:
             resolved_expr = "col2"
+            # last part after last "/"
+            target_id_expr = "regexp_extract(col2, '([^/]+)$', 1)"
+            authority_id_expr = "col1"
+
         else:
             print(f"Skipping {name}: no matching rule for filename")
             continue
 
         # Build resolved_expr for target-notnull cases
         if "target-notnull" in name:
+            # resolved_expr = f"""
+            #     CASE
+            #         WHEN TARGET LIKE '%{{ID}}%'
+            #             THEN REPLACE(TARGET, '{{ID}}', CAST({id_col} AS VARCHAR))
+            #         ELSE TARGET || ' ' || CAST({id_col} AS VARCHAR)
+            #     END
+            # """
             resolved_expr = f"""
                 CASE
                     WHEN TARGET LIKE '%{{ID}}%'
                         THEN REPLACE(TARGET, '{{ID}}', CAST({id_col} AS VARCHAR))
-                    ELSE TARGET || ' ' || CAST({id_col} AS VARCHAR)
+                    ELSE
+                        regexp_replace(TARGET, '/?$', '/') || CAST({id_col} AS VARCHAR)
                 END
             """
+
 
         out_path = actualpath.with_stem(actualpath.stem + "_resolved")
         print(f"Creating {out_path.name} (rule from {name})")
@@ -356,13 +383,17 @@ def create_resolved_parquets(parquet_paths):
                     col3,
                     col4,
                     col5,
-                    {resolved_expr} AS resolved
+                    {resolved_expr} AS target_uri,
+                    {target_id_expr} AS target_id,
+                    {authority_id_expr} AS authority_id
                 FROM '{actualpath.as_posix()}'
             ) TO '{out_path.as_posix()}'
             (FORMAT 'parquet');
         """)
 
         print(f"  → wrote {out_path}")
+
+
 
 
 def dump_df_samples_to_json(
@@ -425,6 +456,7 @@ def make_inspectable_jsons_from_parquets(parquet_paths):
 def main() -> None:
     data_dir = Path("data")
     parquet_path = data_dir / "aggregations" / "beacons_20251212-1605.parquet"
+    merged_parquet_path = data_dir / "merged" / f"beacons_merged_{datetime.now().strftime("%Y%m%d-%H%M")}.parquet"
 
     # list of parquet files the aggregation will be split into (= BEACON variants)
     parquet_toresolveurls_paths = [
@@ -474,6 +506,9 @@ def main() -> None:
 
     print(out_path)
 
+
+
+    merge_parquets(parquet_withresolvedurls_paths, merged_parquet_path)
 
 
     # Hagrid NDIF fields
