@@ -18,3 +18,4 @@ build/
 
 # --- Project-specific data ---
 data/
+df_out_*.json
