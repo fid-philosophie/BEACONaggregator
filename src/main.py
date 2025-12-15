@@ -449,21 +449,17 @@ def main() -> None:
 
     parquet_path = beacons_to_parquet() # beacons in 1 parquet umwandeln
 
-    #print(parquet_path)
-
     #look_into_parquet(parquet_path) # parquet auswerten
 
     split_parquet(parquet_path) # split by target null/not null and col1-3
 
-    # Point this to your directory with parquet files
-    #samples = sample_parquet_dir(parquet_dir)
-
-    # `samples` is now a dict of DataFrames for quick exploration in Python:
-    # e.g. see the sample for one file:
-    #samples["my_file.parquet"].head()
+    # # Point this to your directory with parquet files
+    # samples = sample_parquet_dir(parquet_dir)
+    # # `samples` is now a dict of DataFrames for quick exploration in Python:
+    # # e.g. see the sample for one file:
+    # samples["my_file.parquet"].head()
 
     # resolve urls for all types of beacons and create new parquets:
-    #create_resolved_parquets(parquet_dir)
     create_resolved_parquets(parquet_toresolveurls_paths)
     
     # make inspectable json files (with samples) from single parquets
