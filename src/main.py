@@ -2,47 +2,39 @@
 
 #from __future__ import annotations
 
+import gc
 import json
 import re
-from pathlib import Path
-
+import duckdb
 import pandas as pd
-
-from load_beacon_list import LoadBeaconList
-from download_beacon_file import DownloadBeaconFile
-from parsebeaconfile import parse_beacon_file
-
 import pyarrow.parquet as pq
 
-import duckdb
-
+from pathlib import Path
 from datetime import datetime
-
-
-import gc
-
-from dataclasses import dataclass
 from typing import Optional, Sequence, Any, Dict, Union, List
-
-import duckdb
-import pandas as pd
-
 from collections import defaultdict
 
+#from load_beacon_list import LoadBeaconList
+#from download_beacon_file import DownloadBeaconFile
 
-@dataclass
-class ParquetInspection:
-    path_repr: str
-    schema: list[tuple[str, str]]
-    row_count: Optional[int]
-    preview_df: pd.DataFrame
-    random_sample_df: pd.DataFrame
-    file_metadata: Optional[pd.DataFrame]
-    null_counts: Optional[pd.DataFrame]
-    approx_distinct: Optional[pd.DataFrame]
-    min_max: Optional[pd.DataFrame]
+#from parsebeaconfile import parse_beacon_file
 
+from handle_parquets import inspect_parquet_with_duckdb, qident, look_into_parquet
+from helpers import make_safe_prefix
+from beacons import download_beacon_file, parse_beacon_file, load_beacon_list
 
+EXPECTED_COLUMNS = [
+    "source_file",
+    "TARGET",
+    "NAME",
+    "FEED",
+    "TIMESTAMP",
+    "col1",
+    "col2",
+    "col3",
+    "col4",
+    "col5",
+]
 
 
 def add_contains_matches_and_dump_json(
@@ -155,243 +147,8 @@ def _dump_df_json(df: pd.DataFrame, out_dir: str | Path, out_name: str | None) -
     return out_path
 
 
-def qident(name: str) -> str:
-    """Quote a SQL identifier (column/table name) for DuckDB."""
-    return '"' + name.replace('"', '""') + '"'
 
 
-def inspect_parquet_with_duckdb(
-    parquet_path: Union[str, Path, Sequence[Union[str, Path]]],
-    *,
-    preview_rows: int = 10,
-    random_sample_rows: int = 100,
-    sample_seed: Optional[int] = None,     # reproducible if set
-    compute_row_count: bool = True,
-    stats_mode: str = "sample",            # "none" | "sample" | "full"
-    sample_rows_for_stats: int = 200_000,
-    columns_for_distinct: Optional[Sequence[str]] = None,
-    include_file_metadata: bool = True,    # best-effort (most reliable for single path / glob)
-) -> ParquetInspection:
-    """
-    DuckDB 1.4.2-compatible Parquet inspector.
-
-    Shows:
-      1) column names + indexes
-      2) column types
-      3) useful extras: preview, row count, file metadata (best-effort),
-         null counts, approx distinct, min/max (optional)
-
-    Returns:
-      - random_sample_df: random sample rows as a pandas DataFrame
-    """
-
-    if stats_mode not in {"none", "sample", "full"}:
-        raise ValueError("stats_mode must be one of: 'none', 'sample', 'full'")
-
-    def _to_str(p: Union[str, Path]) -> str:
-        return p.as_posix() if isinstance(p, Path) else str(p)
-
-    def qident(name: str) -> str:
-        """Quote a SQL identifier (column/table name) for DuckDB."""
-        return '"' + name.replace('"', '""') + '"'
-
-    # Normalize paths / arguments for read_parquet(?)
-    if isinstance(parquet_path, (list, tuple)):
-        paths: List[str] = [_to_str(p) for p in parquet_path]
-        read_parquet_arg: Union[str, List[str]] = paths
-        path_repr = ", ".join(paths[:3]) + (" ..." if len(paths) > 3 else "")
-        single_for_metadata: Optional[str] = None
-    else:
-        p = _to_str(parquet_path)
-        read_parquet_arg = p
-        path_repr = p
-        single_for_metadata = p
-
-    con = duckdb.connect(database=":memory:")
-    con.execute("PRAGMA enable_progress_bar=false;")
-
-    # 1) + 2) schema (names + types)
-    describe_rows = con.execute(
-        "DESCRIBE SELECT * FROM read_parquet(?);",
-        [read_parquet_arg],
-    ).fetchall()
-    schema = [(r[0], r[1]) for r in describe_rows]
-
-    print("\nColumns (index: name : type)")
-    for i, (name, typ) in enumerate(schema):
-        print(f"  {i:>3}: {name} : {typ}")
-
-    # Best-effort file metadata
-    file_metadata_df: Optional[pd.DataFrame] = None
-    if include_file_metadata and single_for_metadata is not None:
-        try:
-            file_metadata_df = con.execute(
-                "SELECT * FROM parquet_file_metadata(?);",
-                [single_for_metadata],
-            ).fetchdf()
-
-            print("\nParquet file metadata (high level):")
-            cols = [c for c in ["file_name", "num_rows", "num_row_groups", "created_by", "format_version"] if c in file_metadata_df.columns]
-            print(file_metadata_df[cols] if cols else file_metadata_df.head(5))
-        except duckdb.Error:
-            file_metadata_df = None
-
-    # Preview
-    preview_df = con.execute(
-        f"SELECT * FROM read_parquet(?) LIMIT {int(preview_rows)};",
-        [read_parquet_arg],
-    ).fetchdf()
-    print(f"\nPreview (first {preview_rows} rows):")
-    print(preview_df)
-
-    # Random sample (DuckDB 1.4.2-compatible): ORDER BY random()
-    if sample_seed is not None:
-        # setseed expects float in [0,1); map int -> float deterministically
-        con.execute("SELECT setseed(?);", [((int(sample_seed) % 1_000_000) / 1_000_000.0)])
-
-    random_sample_df = con.execute(
-        f"""
-        SELECT *
-        FROM read_parquet(?)
-        ORDER BY random()
-        LIMIT {int(random_sample_rows)};
-        """,
-        [read_parquet_arg],
-    ).fetchdf()
-    print(f"\nRandom sample ({random_sample_rows} rows):")
-    print(random_sample_df)
-
-    # Row count
-    row_count: Optional[int] = None
-    if compute_row_count:
-        row_count = con.execute(
-            "SELECT COUNT(*) FROM read_parquet(?);",
-            [read_parquet_arg],
-        ).fetchone()[0]
-        print(f"\nRow count: {row_count:,}")
-
-    # Optional stats
-    null_counts_df = approx_distinct_df = min_max_df = None
-    if stats_mode != "none":
-        if stats_mode == "full":
-            rel_sql = "SELECT * FROM read_parquet(?)"
-            rel_params = [read_parquet_arg]
-        else:
-            rel_sql = f"SELECT * FROM read_parquet(?) LIMIT {int(sample_rows_for_stats)}"
-            rel_params = [read_parquet_arg]
-
-        # Null counts
-        null_exprs = ", ".join(
-            f"SUM(CASE WHEN {qident(col)} IS NULL THEN 1 ELSE 0 END) AS {qident(col)}"
-            for col, _ in schema
-        )
-        null_counts_df = con.execute(
-            f"SELECT {null_exprs} FROM ({rel_sql}) t;",
-            rel_params,
-        ).fetchdf()
-
-        # Approx distinct
-        cols_for_dist = list(columns_for_distinct) if columns_for_distinct else [c for c, _ in schema]
-        dist_exprs = ", ".join(
-            f"approx_count_distinct({qident(col)}) AS {qident(col)}"
-            for col in cols_for_dist
-        )
-        approx_distinct_df = con.execute(
-            f"SELECT {dist_exprs} FROM ({rel_sql}) t;",
-            rel_params,
-        ).fetchdf()
-
-        # Min/Max (best effort per column)
-        rows: list[tuple[str, Any, Any]] = []
-        for col, _typ in schema:
-            col_id = qident(col)
-            try:
-                mn, mx = con.execute(
-                    f"SELECT MIN({col_id}) AS mn, MAX({col_id}) AS mx FROM ({rel_sql}) t;",
-                    rel_params,
-                ).fetchone()
-                rows.append((col, mn, mx))
-            except duckdb.Error:
-                pass
-        min_max_df = pd.DataFrame(rows, columns=["column", "min", "max"])
-
-    con.close()
-
-    return ParquetInspection(
-        path_repr=path_repr,
-        schema=schema,
-        row_count=row_count,
-        preview_df=preview_df,
-        random_sample_df=random_sample_df,
-        file_metadata=file_metadata_df,
-        null_counts=null_counts_df,
-        approx_distinct=approx_distinct_df,
-        min_max=min_max_df,
-    )
-
-def make_safe_prefix(url: str, max_len: int = 80) -> str:
-    """
-    Convert an arbitrary URL into a filename-safe prefix.
-    - Replace non-alphanumeric characters with '_'
-    - Collapse multiple '_' into one
-    - Trim to max_len
-    - Ensure it ends with '_' (if not empty)
-    """
-    # Replace non-alnum with '_'
-    prefix = re.sub(r"[^A-Za-z0-9]+", "_", url)
-
-    # Collapse multiple underscores
-    prefix = re.sub(r"_+", "_", prefix).strip("_")
-
-    if not prefix:
-        return ""
-
-    # Trim
-    if len(prefix) > max_len:
-        prefix = prefix[:max_len].rstrip("_")
-
-    # Ensure trailing underscore to separate from basename
-    return prefix + "_"
-
-
-def download_from_beaconlist():
-    """ this will take some time and will take up over 270 MB """
-    
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    out_dir = Path(f"data/beacons_{timestamp}")
-
-    beacon_list = LoadBeaconList()
-    print("Loaded beacon list:", len(beacon_list), "entries")
-
-    all_metadata = []
-
-    for idx, entry in enumerate(beacon_list):
-        url = entry.get("beacon_url")
-        if not url:
-            print(f"[{idx}] No beacon_url in entry, skipping")
-            continue
-
-        # Build a filename-safe prefix from the URL
-        url_prefix = make_safe_prefix(url)
-        # Add index in front to ensure uniqueness & stable ordering
-        prefix = f"{idx:04d}_{url_prefix}" if url_prefix else f"{idx:04d}_"
-
-        dest_path, metadata = DownloadBeaconFile(
-            url,
-            out_dir=out_dir,
-            overwrite=False,
-            filename_prefix=prefix,
-        )
-
-        if metadata is not None:
-            all_metadata.append(metadata)
-
-    # Write one JSON file with all metadata
-    metadata_path = out_dir / "beacon_downloads_metadata.json"
-    with metadata_path.open("w", encoding="utf-8") as f:
-        json.dump(all_metadata, f, ensure_ascii=False, indent=2)
-
-    print(f"Wrote metadata for {len(all_metadata)} entries to {metadata_path}")
 
 def collect_beacons_to_dataframe(
     beacons_dir: str | Path,
@@ -439,59 +196,33 @@ def collect_beacons_to_dataframe(
     #         ]
     #     )
     
+    # if not dfs:
+    #     print("No BEACON data parsed.")
+    #     return pd.DataFrame(
+    #         columns=[
+    #             "source_file",
+    #             "TARGET",
+    #             "NAME",
+    #             "FEED",
+    #             "TIMESTAMP",
+    #             "col1",
+    #             "col2",
+    #             "col3",
+    #             "col4",
+    #             "col5"
+    #         ]
+    #     )
     if not dfs:
         print("No BEACON data parsed.")
         return pd.DataFrame(
-            columns=[
-                "source_file",
-                "TARGET",
-                "NAME",
-                "FEED",
-                "TIMESTAMP",
-                "col1",
-                "col2",
-                "col3",
-                "col4",
-                "col5"
-            ]
+            columns=EXPECTED_COLUMNS
         )
-
 
 
     big_df = pd.concat(dfs, ignore_index=True)
     print(f"Total rows combined: {len(big_df)}")
     return big_df
 
-def beacons_to_parquet__OLD():
-    """ takes a while """
-    beacons_dir = Path("data/beacons")
-    out_dir = Path("data/aggregations")
-    beacons_dir.mkdir(parents=True, exist_ok=True)
-
-    # Build one big DataFrame from all BEACON files
-    df = collect_beacons_to_dataframe(beacons_dir)
-
-    # --- Write Parquet ---
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M")
-    parquet_path = out_dir / f"beacons_{timestamp}.parquet"
-    # requires pyarrow or fastparquet
-    df.to_parquet(parquet_path, index=False)
-    print(f"Wrote Parquet: {parquet_path}")
-    return parquet_path
-
-
-EXPECTED_COLUMNS = [
-    "source_file",
-    "TARGET",
-    "NAME",
-    "FEED",
-    "TIMESTAMP",
-    "col1",
-    "col2",
-    "col3",
-    "col4",
-    "col5",
-]
 
 
 def _normalize_beacon_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -592,227 +323,6 @@ def beacons_to_parquet(
         print(f"Wrote Parquet: {parquet_path} (rows: {total_rows})")
 
     return parquet_path
-
-def look_into_parquet(filename):
-    # table = pq.ParquetFile(filename)
-
-    # # for batch in table.iter_batches(batch_size=100000):
-    # #     df = batch.to_pandas()
-    # #     # process df here
-    # # df_head = batch.to_pandas()
-    # # print(df_head)
-
-    # pf = pq.ParquetFile(filename)
-
-    # print(pf.schema_arrow.names)
-    # print(pf.schema_arrow)
-
-    # batch = next(pf.iter_batches(batch_size=5))
-    # df_preview = batch.to_pandas()
-    # print(df_preview)
-
-    # found = False
-    # column_name = "col4"
-
-    # for batch in pf.iter_batches(columns=[column_name], batch_size=100000):
-    #     col = batch.column(column_name)
-    #     if col.null_count < len(col):    # means at least one non-null
-    #         found = True
-    #         break
-
-    # print(column_name + " has a non-null value:", found)
-
-    # examples = []
-    # N = 20  # how many samples you want
-
-    # for batch in pf.iter_batches(columns=[column_name], batch_size=100000):
-    #     col = batch.column(column_name).to_pylist()  # convert only this column
-    #     for value in col:
-    #         if value is not None:
-    #             examples.append(value)
-    #             if len(examples) >= N:
-    #                 break
-    #     if len(examples) >= N:
-    #         break
-
-    # print(examples)
-
-    # column_name = "col1"
-
-    # rows = duckdb.sql(f"""
-    # SELECT *
-    # FROM (
-    #     SELECT COUNT(*)
-    #     FROM '{filename}'
-    #     WHERE {column_name} IS NOT NULL
-    #     AND col1 IS NOT NULL
-    #     AND col2 IS NOT NULL
-    #     AND col3 IS NOT NULL
-    #     AND TARGET IS NULL
-    # )
-    # """).fetchone()[0]
-    # print("rows=", rows)
-
-    out_dir = Path("data/aggregations")
-
-    rows = duckdb.sql(f"""
-    SELECT *
-    FROM (
-        SELECT COUNT(*)
-        FROM '{filename}'
-        WHERE col1 IS NOT NULL
-        AND col1 IS NOT NULL
-        AND col2 IS NOT NULL
-        AND col3 IS NOT NULL
-        AND TARGET IS NULL
-    )
-    """).fetchone()[0]
-    print("col1-3 not null + target null")
-    print("rows=", rows)
-
-    rows = duckdb.sql(f"""
-    SELECT *
-    FROM (
-        SELECT COUNT(*)
-        FROM '{filename}'
-        WHERE col1 IS NOT NULL
-        AND col1 IS NOT NULL
-        AND col2 IS NOT NULL
-        AND col3 IS NULL
-        AND TARGET IS NULL
-    )
-    """).fetchone()[0]
-    print("col1-2 not null + target null")
-    print("rows=", rows)
-
-    rows = duckdb.sql(f"""
-    SELECT *
-    FROM (
-        SELECT COUNT(*)
-        FROM '{filename}'
-        WHERE col1 IS NOT NULL
-        AND col1 IS NOT NULL
-        AND col2 IS NULL
-        AND col3 IS NULL
-        AND TARGET IS NULL
-    )
-    """).fetchone()[0]
-    print("col1 not null + target null")
-    print("rows=", rows)
-
-
-    rows = duckdb.sql(f"""
-    SELECT *
-    FROM (
-        SELECT COUNT(*)
-        FROM '{filename}'
-        WHERE col1 IS NULL
-        AND col2 IS NOT NULL
-        AND col3 IS NULL
-        AND TARGET IS NULL
-    )
-    """).fetchone()[0]
-    print("col1 null, col2 not null + target null")
-    print("rows=", rows)
-
-
-###########################################
-    rows = duckdb.sql(f"""
-    SELECT *
-    FROM (
-        SELECT COUNT(*)
-        FROM '{filename}'
-        WHERE col1 IS NOT NULL
-        AND col1 IS NOT NULL
-        AND col2 IS NOT NULL
-        AND col3 IS NOT NULL
-        AND TARGET IS NOT NULL
-    )
-    """).fetchone()[0]
-    print("col1-3 not null + target not null")
-    print("rows=", rows)
-
-    rows = duckdb.sql(f"""
-    SELECT *
-    FROM (
-        SELECT COUNT(*)
-        FROM '{filename}'
-        WHERE col1 IS NOT NULL
-        AND col1 IS NOT NULL
-        AND col2 IS NOT NULL
-        AND col3 IS NULL
-        AND TARGET IS NOT NULL
-    )
-    """).fetchone()[0]
-    print("col1-2 not null + target not null")
-    print("rows=", rows)
-
-    rows = duckdb.sql(f"""
-    SELECT *
-    FROM (
-        SELECT COUNT(*)
-        FROM '{filename}'
-        WHERE col1 IS NOT NULL
-        AND col1 IS NOT NULL
-        AND col2 IS NULL
-        AND col3 IS NULL
-        AND TARGET IS NOT NULL
-    )
-    """).fetchone()[0]
-    print("col1 not null + target not null")
-    print("rows=", rows)
-
-
-    rows = duckdb.sql(f"""
-    SELECT *
-    FROM (
-        SELECT COUNT(*)
-        FROM '{filename}'
-        WHERE col1 IS NULL
-        AND col2 IS NOT NULL
-        AND col3 IS NULL
-        AND TARGET IS NOT NULL
-    )
-    """).fetchone()[0]
-    print("col1 null, col2 not null + target not null")
-    print("rows=", rows)
-    
-    df = duckdb.sql(f"""
-    SELECT *
-    FROM (
-        SELECT COUNT(*)
-        FROM '{filename}'
-        WHERE col1 IS NULL
-        AND col2 IS NOT NULL
-        AND col3 IS NULL
-        AND TARGET IS NOT NULL
-    )
-    """).df()
-    parquet_path = out_dir / f"target-notnull_col2-only.parquet"
-    df.to_parquet(parquet_path, index=False)
-    print(f"Wrote Parquet: {parquet_path}")
-
-    
-
-    # # get some examples
-    # df = duckdb.sql(f"""
-    # SELECT *
-    # FROM (
-    #     SELECT
-    #         *,
-    #         row_number() OVER () AS row_id
-    #     FROM '{filename}'
-    #     WHERE {column_name} IS NOT NULL
-    #     AND col1 IS NOT NULL
-    #     AND col2 IS NOT NULL
-    #     AND col3 IS NOT NULL
-    # )
-    # USING SAMPLE 100 ROWS;
-    # """).df()
-
-    #print(df)
-    #df.to_json("df_out.json", orient="records", indent=2)
-
 
 
 def count_categories(parquet_path):
@@ -939,78 +449,6 @@ def sample_parquet_dir(
     return samples
 
 
-from pathlib import Path
-import duckdb
-
-def OLD_create_resolved_parquets(parquet_paths):
-    #parquet_dir = Path(parquet_dir)
-
-    #for path in parquet_dir.glob("*.parquet"):
-    for path in parquet_paths:
-        #name = path.name
-        actualpath = Path(path)
-        name = actualpath.name
-
-        # Decide resolved expression based on filename patterns
-        if "target-notnull" in name and "col1-2-3" in name:
-            # concat TARGET and col3
-            #resolved_expr = "TARGET || ' ' || col3"
-            value_expr = "col3"
-        elif "target-notnull" in name and "col1-2" in name:
-            # concat TARGET and col1
-            #resolved_expr = "TARGET || ' ' || col1"
-            value_expr = "col1"
-        elif "target-notnull" in name and "col1-only" in name:
-            # concat TARGET and col1
-            #resolved_expr = "TARGET || ' ' || col1"
-            value_expr = "col1"
-        elif "target-null" in name and "col1-2-3" in name:
-            # take col3
-            resolved_expr = "col3"
-        elif "target-null" in name and "col1-2" in name:
-            # take col2
-            resolved_expr = "col2"
-        else:
-            print(f"Skipping {name}: no matching rule for filename")
-            continue
-
-
-        # Build resolved_expr for target-notnull cases
-        if "target-notnull" in name:
-            value_expr = f"""
-                CASE
-                    WHEN TARGET LIKE '%{{ID}}%'
-                        THEN REPLACE(TARGET, '{{ID}}', {value_expr})
-                    ELSE TARGET || ' ' || {value_expr}
-                END
-            """
-
-
-        out_path = actualpath.with_stem(actualpath.stem + "_resolved")
-
-        print(f"Creating {out_path.name} (rule from {name})")
-
-        duckdb.sql(f"""
-            COPY (
-                SELECT
-                    source_file,
-                    TARGET,
-                    NAME,
-                    FEED,
-                    TIMESTAMP,
-                    col1,
-                    col2,
-                    col3,
-                    col4,
-                    col5,
-                    {resolved_expr} AS resolved
-                FROM '{actualpath.as_posix()}'
-            ) TO '{out_path.as_posix()}'
-            (FORMAT 'parquet');
-        """)
-
-        print(f"  → wrote {out_path}")
-
 
 def create_resolved_parquets(parquet_paths):
     for path in parquet_paths:
@@ -1130,27 +568,7 @@ def main() -> None:
     data_dir = Path("data")
     parquet_path = data_dir / "aggregations" / "beacons_20251212-1605.parquet"
 
-
-    # use parquet_path for sample creation (=> inspect json files)
-    #parquet_path = Path("data/split_aggregations/target-null_col1-only.parquet")
-    #parquet_path = Path("data/split_aggregations/target-null_col1-2.parquet")
-    #parquet_path = Path("data/split_aggregations/target-null_col1-2-3.parquet")
-
-    #parquet_path = Path("data/split_aggregations/target-notnull_col1-only.parquet")
-    #parquet_path = Path("data/split_aggregations/target-notnull_col1-2.parquet")
-    #parquet_path = Path("data/split_aggregations/target-notnull_col1-2-3.parquet")
-
-
-    # use parquet_path for sample creation (=> inspect json files) // same same, but for resolved urls
-    #---doesnotexist---parquet_path = Path("data/split_aggregations/target-null_col1-only_resolved.parquet")
-    #parquet_path = Path("data/split_aggregations/target-null_col1-2_resolved.parquet")
-    #parquet_path = Path("data/split_aggregations/target-null_col1-2-3_resolved.parquet")
-
-    #parquet_path = Path("data/split_aggregations/target-notnull_col1-only_resolved.parquet")
-    #parquet_path = Path("data/split_aggregations/target-notnull_col1-2_resolved.parquet")
-    #parquet_path = Path("data/split_aggregations/target-notnull_col1-2-3_resolved.parquet")
-
-
+    # list of parquet files the aggregation will be split into (= BEACON variants)
     parquet_toresolveurls_paths = [
         "data/split_aggregations/target-null_col1-2.parquet",
         "data/split_aggregations/target-null_col1-2-3.parquet",
@@ -1159,6 +577,7 @@ def main() -> None:
         "data/split_aggregations/target-notnull_col1-2-3.parquet",
     ]
 
+    # list of parquet files with resolved uris (e.g. repalced "{ID}" placeholders)
     parquet_withresolvedurls_paths = [
         "data/split_aggregations/target-null_col1-2_resolved.parquet",
         "data/split_aggregations/target-null_col1-2-3_resolved.parquet",
@@ -1170,13 +589,13 @@ def main() -> None:
 
     parquet_dir = data_dir / "split_aggregations"
 
-    #parquet_path = beacons_to_parquet() # beacons in 1 parquet umwandeln
+    parquet_path = beacons_to_parquet() # beacons in 1 parquet umwandeln
 
     #print(parquet_path)
 
     #look_into_parquet(parquet_path) # parquet auswerten
 
-    #split_parquet(parquet_path) # split by target null/not null and col1-3
+    split_parquet(parquet_path) # split by target null/not null and col1-3
 
     # Point this to your directory with parquet files
     #samples = sample_parquet_dir(parquet_dir)
@@ -1188,62 +607,15 @@ def main() -> None:
     # resolve urls for all types of beacons and create new parquets:
     #create_resolved_parquets(parquet_dir)
     create_resolved_parquets(parquet_toresolveurls_paths)
-
-
-    # rows = duckdb.sql(f"""
-    # SELECT COUNT(*)
-    # FROM '{parquet_path}'
-    # WHERE col2 IS NOT NULL
-    #   AND col3 IS NULL
-    #   AND col4 IS NULL
-    #   AND col5 IS NULL
-    #   AND col6 IS NULL
-    #   AND col7 IS NULL
-    #   AND col8 IS NULL
-    #   AND col9 IS NULL
-    #   AND TARGET IS NOT NULL
-    # """).fetchone()[0]
-
-    # print("Number of matching rows:", rows)
-
-    # info = inspect_parquet_with_duckdb(
-    #     parquet_path,
-    #     random_sample_rows=100,
-    #     sample_seed=42,          # omit for non-deterministic
-    #     stats_mode="sample",
-    # )
-    # df = info.random_sample_df
-
-
     
     # make inspectable json files (with samples) from single parquets
     make_inspectable_jsons_from_parquets(parquet_withresolvedurls_paths)
 
-    # info = inspect_parquet_with_duckdb(
-    #     Path(parquet_path),
-    #     preview_rows=10,
-    #     random_sample_rows=100,
-    #     sample_seed=42,          # optional, for reproducible sampling
-    #     compute_row_count=True,
-    #     stats_mode="sample",     # "none" | "sample" | "full"
-    # )
-
-    # df_sample = info.random_sample_df
-    # print(df_sample)
-
-    # json_path = dump_df_samples_to_json(
-    #     df_sample,
-    #     parquet_path,
-    # )
-    # print(f"Wrote JSON samples: {json_path}")
-
-
-    beaconlist_json = LoadBeaconList()
-
+    # get/load BEACONlist
+    beaconlist_json = load_beacon_list()
     df_beaconlist = pd.DataFrame(beaconlist_json)
 
-
-
+    # match BEACONlist with parquet splits (=> which BEACON uses which BEACON format variants)
     out_path = add_contains_matches_and_dump_json(df_beaconlist, parquet_withresolvedurls_paths)
 
     print(out_path)
