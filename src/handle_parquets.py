@@ -1,6 +1,10 @@
+from __future__ import annotations
+
+import pyarrow as pa
+
 import pyarrow.parquet as pq
 from pathlib import Path
-from typing import Optional, Sequence, Any, Dict, Union, List
+from typing import Optional, Sequence, Any, Dict, Union, List, Iterable, Sequence
 from dataclasses import dataclass
 import pandas as pd
 import duckdb
@@ -16,6 +20,87 @@ class ParquetInspection:
     null_counts: Optional[pd.DataFrame]
     approx_distinct: Optional[pd.DataFrame]
     min_max: Optional[pd.DataFrame]
+
+
+
+
+
+def merge_parquets(
+    parquet_files: Sequence[str],
+    output_parquet: str,
+    *,
+    batch_size: int = 262_144,           # rows per batch (tune up/down)
+    compression: str = "zstd",           # or "snappy", "gzip", None
+    use_dictionary: bool = True,
+) -> str:
+    """
+    Merge multiple Parquet files (same column names/structure) into a single Parquet file
+    without holding all data in RAM.
+
+    Parameters
+    ----------
+    parquet_files : list[str]
+        Input parquet paths, in the order they should be appended.
+    output_parquet : str
+        Output parquet path to write.
+    batch_size : int
+        Rows to stream per batch from each source file.
+    compression : str
+        Parquet compression codec: "zstd", "snappy", "gzip", None, etc.
+    use_dictionary : bool
+        Whether to dictionary-encode eligible columns to reduce size.
+
+    Returns
+    -------
+    str
+        The output_parquet path.
+    """
+    if not parquet_files:
+        raise ValueError("parquet_files is empty")
+
+    # Use schema from the first file as the "target" schema
+    first_pf = pq.ParquetFile(parquet_files[0])
+    target_schema = first_pf.schema_arrow
+
+    writer: Optional[pq.ParquetWriter] = None
+
+    try:
+        writer = pq.ParquetWriter(
+            output_parquet,
+            target_schema,
+            compression=compression,
+            use_dictionary=use_dictionary,
+        )
+
+        for path in parquet_files:
+            pf = pq.ParquetFile(path)
+
+            # Stream record batches from each file
+            for batch in pf.iter_batches(batch_size=batch_size):
+                # Ensure batch matches the output schema (handles minor type drift)
+                tbl = pa.Table.from_batches([batch])
+
+                if tbl.schema != target_schema:
+                    # Reorder / cast columns to match the first file's schema
+                    tbl = tbl.select(target_schema.names).cast(target_schema, safe=False)
+
+                writer.write_table(tbl)
+
+    finally:
+        if writer is not None:
+            writer.close()
+
+    return output_parquet
+
+
+# Example usage:
+# out = merge_parquets(
+#     ["a.parquet", "b.parquet", "c.parquet", "d.parquet", "e.parquet"],
+#     "merged.parquet",
+#     batch_size=100_000,
+# )
+# print("Wrote:", out)
+
 
 
 def qident(name: str) -> str:
