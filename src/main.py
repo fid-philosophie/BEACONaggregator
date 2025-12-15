@@ -14,27 +14,11 @@ from datetime import datetime
 from typing import Optional, Sequence, Any, Dict, Union, List
 from collections import defaultdict
 
-#from load_beacon_list import LoadBeaconList
-#from download_beacon_file import DownloadBeaconFile
-
-#from parsebeaconfile import parse_beacon_file
-
 from handle_parquets import inspect_parquet_with_duckdb, qident, look_into_parquet
 from helpers import make_safe_prefix
-from beacons import download_beacon_file, parse_beacon_file, load_beacon_list
+from beacons import download_beacon_file, parse_beacon_file, load_beacon_list, collect_beacons_to_dataframe, iter_beacon_dataframes
 
-EXPECTED_COLUMNS = [
-    "source_file",
-    "TARGET",
-    "NAME",
-    "FEED",
-    "TIMESTAMP",
-    "col1",
-    "col2",
-    "col3",
-    "col4",
-    "col5",
-]
+
 
 
 def add_contains_matches_and_dump_json(
@@ -145,132 +129,6 @@ def _dump_df_json(df: pd.DataFrame, out_dir: str | Path, out_name: str | None) -
     df.to_json(out_path, orient="records", indent=2, force_ascii=False)
     print(f"Wrote JSON: {out_path}")
     return out_path
-
-
-
-
-
-def collect_beacons_to_dataframe(
-    beacons_dir: str | Path,
-    skip_suffixes: tuple[str, ...] = (".json",),
-) -> pd.DataFrame:
-    """
-    Read all BEACON files in `beacons_dir` into a single DataFrame.
-
-    Skips files whose suffix is in skip_suffixes (e.g. the downloads metadata JSON).
-    """
-
-    beacons_dir = Path(beacons_dir)
-
-    dfs = []
-
-    for path in sorted(beacons_dir.iterdir()):
-        if not path.is_file():
-            continue
-        if path.suffix in skip_suffixes:
-            # skip metadata / non-BEACONs
-            continue
-
-        print(f"Parsing {path} ...")
-        df = parse_beacon_file(path)
-        if df.empty:
-            print(f"  -> no data rows found in {path}")
-        else:
-            print(f"  -> parsed {len(df)} rows")
-            dfs.append(df)
-
-    # if not dfs:
-    #     print("No BEACON data parsed.")
-    #     return pd.DataFrame(
-    #         columns=[
-    #             "source_file",
-    #             "TARGET",
-    #             "NAME",
-    #             "FEED",
-    #             "TIMESTAMP",
-    #             "col1",
-    #             "col2",
-    #             "col3",
-    #             "col4",
-    #             "col5"
-    #         ]
-    #     )
-    
-    # if not dfs:
-    #     print("No BEACON data parsed.")
-    #     return pd.DataFrame(
-    #         columns=[
-    #             "source_file",
-    #             "TARGET",
-    #             "NAME",
-    #             "FEED",
-    #             "TIMESTAMP",
-    #             "col1",
-    #             "col2",
-    #             "col3",
-    #             "col4",
-    #             "col5"
-    #         ]
-    #     )
-    if not dfs:
-        print("No BEACON data parsed.")
-        return pd.DataFrame(
-            columns=EXPECTED_COLUMNS
-        )
-
-
-    big_df = pd.concat(dfs, ignore_index=True)
-    print(f"Total rows combined: {len(big_df)}")
-    return big_df
-
-
-
-def _normalize_beacon_df(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Make schema stable across all chunks:
-    - ensure all expected columns exist
-    - keep fixed order
-    - coerce to pandas 'string' dtype to avoid Arrow 'null' type inference
-    """
-    df = df.copy()
-
-    # Add missing columns
-    for c in EXPECTED_COLUMNS:
-        if c not in df.columns:
-            df[c] = pd.NA
-
-    # Drop unexpected columns (optional; remove this if you want to keep extras)
-    df = df[EXPECTED_COLUMNS]
-
-    # Coerce everything to string dtype (keeps NA as <NA>, not "nan")
-    for c in EXPECTED_COLUMNS:
-        df[c] = df[c].astype("string")
-
-    return df
-
-
-def iter_beacon_dataframes(
-    beacons_dir: str | Path,
-    skip_suffixes: tuple[str, ...] = (".json",),
-):
-    beacons_dir = Path(beacons_dir)
-
-    for path in sorted(beacons_dir.iterdir()):
-        if not path.is_file():
-            continue
-        if path.suffix in skip_suffixes:
-            continue
-
-        print(f"Parsing {path} ...")
-        df = parse_beacon_file(path)
-
-        if df.empty:
-            print(f"  -> no data rows found in {path}")
-            continue
-
-        print(f"  -> parsed {len(df)} rows")
-        yield _normalize_beacon_df(df)
-
 
 def beacons_to_parquet(
     beacons_dir: str | Path = "data/beacons",

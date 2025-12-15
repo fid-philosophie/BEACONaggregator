@@ -21,6 +21,21 @@ RAW_URL = (
     "fid-philosophie/BEACONlist/main/latest/BEACONlist.json"
 )
 
+
+EXPECTED_COLUMNS = [
+    "source_file",
+    "TARGET",
+    "NAME",
+    "FEED",
+    "TIMESTAMP",
+    "col1",
+    "col2",
+    "col3",
+    "col4",
+    "col5",
+]
+
+
 def load_beacon_list():
     resp = requests.get(RAW_URL, timeout=30)
     resp.raise_for_status()  # raises if e.g. 404 / 403
@@ -341,3 +356,163 @@ def parse_beacon_file(path: str | Path) -> pd.DataFrame:
     )
 
     return df
+
+
+def load_beacon_file(url: str):
+    r = requests.get(url, timeout=30)
+    r.raise_for_status()
+
+    # Try to guess encoding; fall back to UTF-8
+    if r.encoding is None:
+        r.encoding = r.apparent_encoding or "utf-8"
+
+    header_lines: list[str] = []
+    data_lines: list[str] = []
+
+    in_header = True
+    for line in r.text.splitlines():
+        if in_header and line.startswith("#"):
+            header_lines.append(line)
+        elif in_header and not line.startswith("#"):
+            # first non-# line → from here on it's data
+            in_header = False
+            if line.strip():          # skip empty lines
+                data_lines.append(line)
+        else:
+            if line.strip():
+                data_lines.append(line)
+
+    # Parse data lines: keep raw line + parts split by '|'
+    records = []
+    for line in data_lines:
+        parts = line.split("|")
+        records.append({
+            "raw": line,   # whole original line
+            "parts": parts # list of fields, length can vary
+        })
+
+    return header_lines, records
+
+
+
+
+def collect_beacons_to_dataframe(
+    beacons_dir: str | Path,
+    skip_suffixes: tuple[str, ...] = (".json",),
+) -> pd.DataFrame:
+    """
+    Read all BEACON files in `beacons_dir` into a single DataFrame.
+
+    Skips files whose suffix is in skip_suffixes (e.g. the downloads metadata JSON).
+    """
+
+    beacons_dir = Path(beacons_dir)
+
+    dfs = []
+
+    for path in sorted(beacons_dir.iterdir()):
+        if not path.is_file():
+            continue
+        if path.suffix in skip_suffixes:
+            # skip metadata / non-BEACONs
+            continue
+
+        print(f"Parsing {path} ...")
+        df = parse_beacon_file(path)
+        if df.empty:
+            print(f"  -> no data rows found in {path}")
+        else:
+            print(f"  -> parsed {len(df)} rows")
+            dfs.append(df)
+
+    # if not dfs:
+    #     print("No BEACON data parsed.")
+    #     return pd.DataFrame(
+    #         columns=[
+    #             "source_file",
+    #             "TARGET",
+    #             "NAME",
+    #             "FEED",
+    #             "TIMESTAMP",
+    #             "col1",
+    #             "col2",
+    #             "col3",
+    #             "col4",
+    #             "col5"
+    #         ]
+    #     )
+    
+    # if not dfs:
+    #     print("No BEACON data parsed.")
+    #     return pd.DataFrame(
+    #         columns=[
+    #             "source_file",
+    #             "TARGET",
+    #             "NAME",
+    #             "FEED",
+    #             "TIMESTAMP",
+    #             "col1",
+    #             "col2",
+    #             "col3",
+    #             "col4",
+    #             "col5"
+    #         ]
+    #     )
+    if not dfs:
+        print("No BEACON data parsed.")
+        return pd.DataFrame(
+            columns=EXPECTED_COLUMNS
+        )
+
+
+    big_df = pd.concat(dfs, ignore_index=True)
+    print(f"Total rows combined: {len(big_df)}")
+    return big_df
+
+
+
+def _normalize_beacon_df(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Make schema stable across all chunks:
+    - ensure all expected columns exist
+    - keep fixed order
+    - coerce to pandas 'string' dtype to avoid Arrow 'null' type inference
+    """
+    df = df.copy()
+
+    # Add missing columns
+    for c in EXPECTED_COLUMNS:
+        if c not in df.columns:
+            df[c] = pd.NA
+
+    # Drop unexpected columns (optional; remove this if you want to keep extras)
+    df = df[EXPECTED_COLUMNS]
+
+    # Coerce everything to string dtype (keeps NA as <NA>, not "nan")
+    for c in EXPECTED_COLUMNS:
+        df[c] = df[c].astype("string")
+
+    return df
+
+
+def iter_beacon_dataframes(
+    beacons_dir: str | Path,
+    skip_suffixes: tuple[str, ...] = (".json",),
+):
+    beacons_dir = Path(beacons_dir)
+
+    for path in sorted(beacons_dir.iterdir()):
+        if not path.is_file():
+            continue
+        if path.suffix in skip_suffixes:
+            continue
+
+        print(f"Parsing {path} ...")
+        df = parse_beacon_file(path)
+
+        if df.empty:
+            print(f"  -> no data rows found in {path}")
+            continue
+
+        print(f"  -> parsed {len(df)} rows")
+        yield _normalize_beacon_df(df)
