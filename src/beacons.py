@@ -199,11 +199,15 @@ def download_beacon_file(
 
 
 
-def download_from_beaconlist():
+def download_from_beaconlist(
+        out_dir: str | Path = "data/beacons"
+):
     """ this will take some time and will take up over 270 MB """
     
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    out_dir = Path(f"data/beacons_{timestamp}")
+    out_dir = Path(out_dir)
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M")
+    #out_dir = Path(f"data/beacons_{timestamp}")
 
     beacon_list = load_beacon_list()
     print("Loaded beacon list:", len(beacon_list), "entries")
