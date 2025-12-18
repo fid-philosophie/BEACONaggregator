@@ -468,7 +468,6 @@ def main_pipeline():
     data_dir = Path("data")
     parquet_path = data_dir / "aggregations" / "beacons_20251212-1605.parquet"
     timestamp = datetime.now().strftime("%Y%m%d-%H%M")
-    #merged_parquet_path = data_dir / "merged" / f"beacons_merged_{datetime.now().strftime("%Y%m%d-%H%M")}.parquet"
     merged_parquet_path = (data_dir / "merged" / f"beacons_merged_{timestamp}.parquet")
 
 
@@ -494,12 +493,12 @@ def main_pipeline():
     parquet_dir = data_dir / "split_aggregations"
 
     
-    #beacons_dir = Path(f"data/beacons_{timestamp}") # comment out, if see below
-    beacons_dir = Path(f"data/beacons/beacons_20251218-175411") # uncomment and set custom name => overwrite timestamped dir name, if needed
+    beacons_dir = Path(f"data/beacons_{timestamp}") # comment out, if see below
+    #beacons_dir = Path(f"data/beacons/beacons_20251218-1754") # uncomment and set custom name => overwrite timestamped dir name, if needed
 
     # download each BEACON file into folder data/beacons/ (~270MB + takes some time)
     # cf. data/beacons/beacon_downloads_metadata.json
-    #download_from_beaconlist(out_dir=beacons_dir)
+    download_from_beaconlist(out_dir=beacons_dir)
 
     # beacons in 1 parquet umwandeln:
     parquet_path = beacons_to_parquet(beacons_dir=beacons_dir)
@@ -546,7 +545,7 @@ def main_pipeline():
 def main() -> None:
     main_pipeline() # memo: refactor!
 
-    ata_dir = Path("data")
+    #data_dir = Path("data")
     #analyze_parquet(data_dir / "merged" / "beacons_merged_20251216-1627.parquet")
 
     #analyze_json_path_uniqueness("data/beacons/beacon_downloads_metadata.json")
