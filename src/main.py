@@ -535,19 +535,19 @@ def main_pipeline():
 
 
 def main() -> None:
-    #main_pipeline() # memo: refactor!
+    main_pipeline() # memo: refactor!
 
-    data_dir = Path("data")
+    ata_dir = Path("data")
     #analyze_parquet(data_dir / "merged" / "beacons_merged_20251216-1627.parquet")
 
     #analyze_json_path_uniqueness("data/beacons/beacon_downloads_metadata.json")
 
-    in_parquet = data_dir / "aggregations" / "beacons_20251215-2059.parquet"
-    out_parquet = data_dir / "aggregations" / "beacons_20251215-2059_addedmeta.parquet"
-    merged_parquet = data_dir / "merged" / "beacons_merged_20251216-1627.parquet"
-    compare_parquet_row_counts(in_parquet, out_parquet, strict=True)
+    # in_parquet = data_dir / "aggregations" / "beacons_20251215-2059.parquet"
+    # out_parquet = data_dir / "aggregations" / "beacons_20251215-2059_addedmeta.parquet"
+    # merged_parquet = data_dir / "merged" / "beacons_merged_20251216-1627.parquet"
+    # compare_parquet_row_counts(in_parquet, out_parquet, strict=True)
 
-    print(count_parquet_rows(merged_parquet))
+    # print(count_parquet_rows(merged_parquet))
 
     # data_dir = Path("data")
     # parquet_path = data_dir / "aggregations" / "beacons_20251212-1605.parquet"
