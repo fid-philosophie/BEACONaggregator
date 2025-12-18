@@ -22,8 +22,222 @@ class ParquetInspection:
     min_max: Optional[pd.DataFrame]
 
 
+from pathlib import Path
+import duckdb
 
 
+def count_parquet_rows(parquet_path: str | Path) -> int:
+    """
+    Count rows in a parquet file using DuckDB (no pandas).
+    """
+    parquet_path = Path(parquet_path)
+
+    if not parquet_path.exists():
+        raise FileNotFoundError(parquet_path)
+
+    con = duckdb.connect()
+
+    row_count = con.execute(
+        "SELECT COUNT(*) FROM read_parquet($1)",
+        [str(parquet_path)],
+    ).fetchone()[0]
+
+    con.close()
+    return row_count
+
+
+def compare_parquet_row_counts(
+    before_parquet: str | Path,
+    after_parquet: str | Path,
+    strict: bool = False,
+) -> dict:
+    """
+    Compare row counts of two parquet files using DuckDB.
+
+    Args:
+        before_parquet: original parquet file
+        after_parquet:  parquet after transformation
+        strict: if True, raise an error when counts differ
+
+    Returns:
+        dict with row counts and difference
+    """
+    before_parquet = Path(before_parquet)
+    after_parquet = Path(after_parquet)
+
+    if not before_parquet.exists():
+        raise FileNotFoundError(before_parquet)
+    if not after_parquet.exists():
+        raise FileNotFoundError(after_parquet)
+
+    con = duckdb.connect()
+
+    before = con.execute(
+        "SELECT COUNT(*) FROM read_parquet($1)",
+        [str(before_parquet)],
+    ).fetchone()[0]
+
+    after = con.execute(
+        "SELECT COUNT(*) FROM read_parquet($1)",
+        [str(after_parquet)],
+    ).fetchone()[0]
+
+    con.close()
+
+    diff = after - before
+    same = diff == 0
+
+    print(f"Rows before: {before:,}")
+    print(f"Rows after:  {after:,}")
+    print(f"Difference:  {diff:+,}")
+
+    if strict and not same:
+        raise ValueError(
+            f"Row count mismatch: before={before:,}, after={after:,}"
+        )
+
+    return {
+        "before_file": str(before_parquet),
+        "after_file": str(after_parquet),
+        "rows_before": before,
+        "rows_after": after,
+        "difference": diff,
+        "same": same,
+    }
+
+
+def add_beacon_metadata_to_latest_parquet(
+    aggregations_dir: str | Path = "data/aggregations",
+    metadata_json: str | Path = "data/beacons/beacon_downloads_metadata.json",
+    output_suffix: str = "_addedmeta",
+) -> Path:
+    aggregations_dir = Path(aggregations_dir)
+    metadata_json = Path(metadata_json)
+
+    parquets = list(aggregations_dir.glob("*.parquet"))
+    if not parquets:
+        raise FileNotFoundError(f"No parquet files found in {aggregations_dir}")
+
+    parquets = [
+        p for p in aggregations_dir.glob("*.parquet")
+        if not p.stem.endswith("_addedmeta")
+    ]
+
+    in_parquet = max(parquets, key=lambda p: p.stat().st_mtime)
+
+
+    out_parquet = in_parquet.with_name(f"{in_parquet.stem}{output_suffix}{in_parquet.suffix}")
+
+    print(f"Input parquet : {in_parquet}")
+    print(f"Output parquet: {out_parquet}")
+    print(f"Metadata JSON : {metadata_json}")
+
+    con = duckdb.connect()
+
+    # Optional: quick sanity check that JSON can be read
+    con.execute(
+        "SELECT path, url, download_time_utc FROM read_json_auto($1, format='auto') LIMIT 1",
+        [str(metadata_json)],
+    )
+
+    sql = r"""
+    COPY (
+      WITH meta AS (
+        SELECT
+          path,
+          url AS beacon_uri,
+          download_time_utc AS beacon_harvest_timestamp
+        FROM read_json_auto($1, format='auto')
+      ),
+      agg AS (
+        SELECT
+          *,
+          replace(source_file, '\/', '/') AS source_file_norm
+        FROM read_parquet($2)
+      )
+      SELECT
+        agg.* EXCLUDE (source_file_norm),
+        meta.beacon_uri,
+        meta.beacon_harvest_timestamp
+      FROM agg
+      LEFT JOIN meta
+        ON agg.source_file_norm = meta.path
+    ) TO $3 (FORMAT PARQUET);
+    """
+
+    con.execute(sql, [str(metadata_json), str(in_parquet), str(out_parquet)])
+    con.close()
+
+    print("✔ Parquet written successfully.")
+    return out_parquet
+
+
+def analyze_parquet(parquet_path: str | Path, show_columns: bool = True) -> dict:
+    """
+    Analyze a parquet file using DuckDB (no pandas):
+      - row count
+      - column count
+      - column names + types
+      - count of "full-row duplicates" (rows identical across all columns)
+
+    Returns a dict with results.
+    """
+    parquet_path = Path(parquet_path)
+
+    if not parquet_path.exists():
+        raise FileNotFoundError(parquet_path)
+
+    con = duckdb.connect()
+
+    # Column names + types (cheap; reads schema/metadata)
+    col_info = con.execute(
+        "DESCRIBE SELECT * FROM read_parquet($1)",
+        [str(parquet_path)],
+    ).fetchall()
+    # DESCRIBE returns rows like: (column_name, column_type, null, null, null, null)
+    columns = [(r[0], r[1]) for r in col_info]
+    col_names = [c[0] for c in columns]
+    col_count = len(columns)
+
+    # Row count
+    row_count = con.execute(
+        "SELECT COUNT(*) FROM read_parquet($1)",
+        [str(parquet_path)],
+    ).fetchone()[0]
+
+    # Full-row duplicate count:
+    # duplicates = total_rows - number_of_distinct_rows_over_all_columns
+    # Using DISTINCT on all columns is exactly what we want here.
+    distinct_rows = con.execute(
+        "SELECT COUNT(*) FROM (SELECT DISTINCT * FROM read_parquet($1))",
+        [str(parquet_path)],
+    ).fetchone()[0]
+    full_row_duplicates = row_count - distinct_rows
+
+    con.close()
+
+    result = {
+        "file": str(parquet_path),
+        "row_count": row_count,
+        "column_count": col_count,
+        "columns": columns,  # list of (name, type)
+        "full_row_duplicates": full_row_duplicates,
+        "distinct_rows": distinct_rows,
+    }
+
+    # Pretty output
+    print(f"\nParquet: {parquet_path}")
+    print(f"Rows:    {row_count:,}")
+    print(f"Cols:    {col_count:,}")
+    print(f"Distinct rows (all cols): {distinct_rows:,}")
+    print(f"Full-row duplicates:      {full_row_duplicates:,}")
+
+    if show_columns:
+        print("\nColumns:")
+        for name, typ in columns:
+            print(f"  - {name}: {typ}")
+
+    return result
 
 def merge_parquets(
     parquet_files: Sequence[str],
