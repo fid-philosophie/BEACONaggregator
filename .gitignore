@@ -17,4 +17,9 @@ dist/
 build/
 
 # --- Project-specific data ---
-data/
+# Generated / runtime data (ignore completely)
+data/aggregations/
+data/split_aggregations/
+data/beaconlist/
+data/beacons/
+data/merged/

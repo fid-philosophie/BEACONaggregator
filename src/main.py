@@ -306,8 +306,8 @@ def sample_parquet_dir(
     return samples
 
 
-def create_resolved_parquets(parquet_paths):
-    beacons_dir = Path("data/beacons")
+def create_resolved_parquets(parquet_paths, beacons_dir):
+    #beacons_dir = Path("data/beacons")
     with open(beacons_dir / "beacon_downloads_metadata.json", "r", encoding="utf-8") as f:
         beacon_metadata = json.load(f)
 
@@ -467,7 +467,10 @@ def make_inspectable_jsons_from_parquets(parquet_paths):
 def main_pipeline():
     data_dir = Path("data")
     parquet_path = data_dir / "aggregations" / "beacons_20251212-1605.parquet"
-    merged_parquet_path = data_dir / "merged" / f"beacons_merged_{datetime.now().strftime("%Y%m%d-%H%M")}.parquet"
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M")
+    #merged_parquet_path = data_dir / "merged" / f"beacons_merged_{datetime.now().strftime("%Y%m%d-%H%M")}.parquet"
+    merged_parquet_path = (data_dir / "merged" / f"beacons_merged_{timestamp}.parquet")
+
 
     # list of parquet files the aggregation will be split into (= BEACON variants)
     parquet_toresolveurls_paths = [
@@ -490,17 +493,23 @@ def main_pipeline():
 
     parquet_dir = data_dir / "split_aggregations"
 
+    
+    #beacons_dir = Path(f"data/beacons_{timestamp}") # comment out, if see below
+    beacons_dir = Path(f"data/beacons/beacons_20251218-175411") # uncomment and set custom name => overwrite timestamped dir name, if needed
+
     # download each BEACON file into folder data/beacons/ (~270MB + takes some time)
     # cf. data/beacons/beacon_downloads_metadata.json
-    download_from_beaconlist()
+    #download_from_beaconlist(out_dir=beacons_dir)
 
     # beacons in 1 parquet umwandeln:
-    parquet_path = beacons_to_parquet()
+    parquet_path = beacons_to_parquet(beacons_dir=beacons_dir)
 
     # parquet auswerten:
     #look_into_parquet(parquet_path)
 
-    parquet_with_metadata_path = add_beacon_metadata_to_latest_parquet()
+    # add metadata:
+    metadata_json = beacons_dir / "beacon_downloads_metadata.json"
+    parquet_with_metadata_path = add_beacon_metadata_to_latest_parquet(metadata_json=metadata_json)
     print(parquet_with_metadata_path)
 
     # # split by target null/not null and col1-3:
@@ -514,7 +523,7 @@ def main_pipeline():
     # # samples["my_file.parquet"].head()
 
     # resolve urls for all types of beacons and create new parquets:
-    create_resolved_parquets(parquet_toresolveurls_paths)
+    create_resolved_parquets(parquet_toresolveurls_paths, beacons_dir)
     
     # make inspectable json files (with samples) from single parquets
     make_inspectable_jsons_from_parquets(parquet_withresolvedurls_paths)

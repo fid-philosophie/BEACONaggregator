@@ -276,11 +276,16 @@ def merge_parquets(
     first_pf = pq.ParquetFile(parquet_files[0])
     target_schema = first_pf.schema_arrow
 
+    # make sure the merged folder exists && path is handled correctly
+    output_parquet_path = Path(output_parquet)
+    output_parquet_path.parent.mkdir(parents=True, exist_ok=True)
+    
+
     writer: Optional[pq.ParquetWriter] = None
 
     try:
         writer = pq.ParquetWriter(
-            output_parquet,
+            str(output_parquet_path),
             target_schema,
             compression=compression,
             use_dictionary=use_dictionary,
