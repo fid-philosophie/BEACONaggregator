@@ -106,27 +106,14 @@ def compare_parquet_row_counts(
     }
 
 
-def add_beacon_metadata_to_latest_parquet(
-    aggregations_dir: str | Path = "data/aggregations",
-    metadata_json: str | Path = "data/beacons/beacon_downloads_metadata.json",
-    output_suffix: str = "_addedmeta",
+def add_beacon_metadata_to_parquet(
+    in_parquet: str | Path,
+    metadata_json: str | Path,
+    out_parquet: str | Path,
 ) -> Path:
-    aggregations_dir = Path(aggregations_dir)
+    in_parquet = Path(in_parquet)
     metadata_json = Path(metadata_json)
-
-    parquets = list(aggregations_dir.glob("*.parquet"))
-    if not parquets:
-        raise FileNotFoundError(f"No parquet files found in {aggregations_dir}")
-
-    parquets = [
-        p for p in aggregations_dir.glob("*.parquet")
-        if not p.stem.endswith("_addedmeta")
-    ]
-
-    in_parquet = max(parquets, key=lambda p: p.stat().st_mtime)
-
-
-    out_parquet = in_parquet.with_name(f"{in_parquet.stem}{output_suffix}{in_parquet.suffix}")
+    out_parquet = Path(out_parquet)
 
     print(f"Input parquet : {in_parquet}")
     print(f"Output parquet: {out_parquet}")
@@ -134,7 +121,6 @@ def add_beacon_metadata_to_latest_parquet(
 
     con = duckdb.connect()
 
-    # Optional: quick sanity check that JSON can be read
     con.execute(
         "SELECT path, url, download_time_utc FROM read_json_auto($1, format='auto') LIMIT 1",
         [str(metadata_json)],
@@ -170,6 +156,33 @@ def add_beacon_metadata_to_latest_parquet(
 
     print("✔ Parquet written successfully.")
     return out_parquet
+
+
+def add_beacon_metadata_to_latest_parquet(
+    aggregations_dir: str | Path = "data/aggregations",
+    metadata_json: str | Path = "data/beacons/beacon_downloads_metadata.json",
+    output_suffix: str = "_addedmeta",
+) -> Path:
+    aggregations_dir = Path(aggregations_dir)
+    metadata_json = Path(metadata_json)
+
+    parquets = list(aggregations_dir.glob("*.parquet"))
+    if not parquets:
+        raise FileNotFoundError(f"No parquet files found in {aggregations_dir}")
+
+    parquets = [
+        p for p in aggregations_dir.glob("*.parquet")
+        if not p.stem.endswith("_addedmeta")
+    ]
+
+    in_parquet = max(parquets, key=lambda p: p.stat().st_mtime)
+    out_parquet = in_parquet.with_name(f"{in_parquet.stem}{output_suffix}{in_parquet.suffix}")
+
+    return add_beacon_metadata_to_parquet(
+        in_parquet=in_parquet,
+        metadata_json=metadata_json,
+        out_parquet=out_parquet,
+    )
 
 
 def analyze_parquet(parquet_path: str | Path, show_columns: bool = True) -> dict:

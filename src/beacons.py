@@ -22,7 +22,7 @@ RAW_URL = (
 )
 
 
-EXPECTED_COLUMNS = [
+EXPECTED_COLUMNS_DEFAULT = [
     "source_file",
     "TARGET",
     "NAME",
@@ -200,14 +200,11 @@ def download_beacon_file(
 
 
 def download_from_beaconlist(
-        out_dir: str | Path = "data/beacons"
+    out_dir: str | Path,
 ):
-    """ this will take some time and will take up over 270 MB """
-    
-    out_dir = Path(out_dir)
+    """This will take some time and will take up over 270 MB."""
 
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M")
-    #out_dir = Path(f"data/beacons_{timestamp}")
+    out_dir = Path(out_dir)
 
     beacon_list = load_beacon_list()
     print("Loaded beacon list:", len(beacon_list), "entries")
@@ -403,6 +400,7 @@ def load_beacon_file(url: str):
 def collect_beacons_to_dataframe(
     beacons_dir: str | Path,
     skip_suffixes: tuple[str, ...] = (".json",),
+    expected_columns: list[str] | None = None,
 ) -> pd.DataFrame:
     """
     Read all BEACON files in `beacons_dir` into a single DataFrame.
@@ -464,9 +462,7 @@ def collect_beacons_to_dataframe(
     #     )
     if not dfs:
         print("No BEACON data parsed.")
-        return pd.DataFrame(
-            columns=EXPECTED_COLUMNS
-        )
+        return pd.DataFrame(columns=_effective_expected_columns(expected_columns))
 
 
     big_df = pd.concat(dfs, ignore_index=True)
@@ -475,7 +471,10 @@ def collect_beacons_to_dataframe(
 
 
 
-def _normalize_beacon_df(df: pd.DataFrame) -> pd.DataFrame:
+def _normalize_beacon_df(
+    df: pd.DataFrame,
+    expected_columns: list[str] | None,
+) -> pd.DataFrame:
     """
     Make schema stable across all chunks:
     - ensure all expected columns exist
@@ -485,15 +484,15 @@ def _normalize_beacon_df(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
     # Add missing columns
-    for c in EXPECTED_COLUMNS:
+    expected_columns = _effective_expected_columns(expected_columns)
+
+    for c in expected_columns:
         if c not in df.columns:
             df[c] = pd.NA
 
-    # Drop unexpected columns (optional; remove this if you want to keep extras)
-    df = df[EXPECTED_COLUMNS]
+    df = df[expected_columns]
 
-    # Coerce everything to string dtype (keeps NA as <NA>, not "nan")
-    for c in EXPECTED_COLUMNS:
+    for c in expected_columns:
         df[c] = df[c].astype("string")
 
     return df
@@ -502,6 +501,7 @@ def _normalize_beacon_df(df: pd.DataFrame) -> pd.DataFrame:
 def iter_beacon_dataframes(
     beacons_dir: str | Path,
     skip_suffixes: tuple[str, ...] = (".json",),
+    expected_columns: list[str] | None = None,
 ):
     beacons_dir = Path(beacons_dir)
 
@@ -519,4 +519,10 @@ def iter_beacon_dataframes(
             continue
 
         print(f"  -> parsed {len(df)} rows")
-        yield _normalize_beacon_df(df)
+        yield _normalize_beacon_df(df, expected_columns)
+
+
+def _effective_expected_columns(expected_columns: list[str] | None) -> list[str]:
+    if expected_columns is None:
+        return list(EXPECTED_COLUMNS_DEFAULT)
+    return list(expected_columns)
