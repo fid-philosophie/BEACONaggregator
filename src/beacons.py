@@ -36,11 +36,39 @@ EXPECTED_COLUMNS = [
 ]
 
 
-def load_beacon_list():
-    resp = requests.get(RAW_URL, timeout=30)
-    resp.raise_for_status()  # raises if e.g. 404 / 403
-    data = resp.json()       # assuming it's valid JSON
-    return data
+# def load_beacon_list():
+#     resp = requests.get(RAW_URL, timeout=30)
+#     resp.raise_for_status()  # raises if e.g. 404 / 403
+#     data = resp.json()       # assuming it's valid JSON
+#     return data
+
+
+def is_url(value: str) -> bool:
+    try:
+        result = urlparse(value)
+        return result.scheme in ("http", "https")
+    except Exception:
+        return False
+
+
+def load_beacon_list(beacon_list_url: str | None = None):
+    source = beacon_list_url or RAW_URL
+
+    if is_url(source):
+        # Remote JSON
+        resp = requests.get(source, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+
+    else:
+        # Local file
+        path = Path(source)
+
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
 
 
 def download_beacon_file(
