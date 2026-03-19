@@ -21,6 +21,7 @@ build/
 data/aggregations/
 data/split_aggregations/
 data/beaconlist/
+data/beaconlist_matches/
 data/beacons/
 data/merged/
 data/broken/
