@@ -16,11 +16,11 @@ import pandas as pd
 
 from typing import Optional, Sequence, Any, Dict, Union, List
 
+# RAW_URL will be used as default BEACONlist:
 RAW_URL = (
     "https://raw.githubusercontent.com/"
     "fid-philosophie/BEACONlist/main/latest/BEACONlist.json"
 )
-
 
 EXPECTED_COLUMNS = [
     "source_file",
@@ -228,6 +228,7 @@ def download_beacon_file(
 
 
 def download_from_beaconlist(
+        beaconlist_location: str,
         out_dir: str | Path = "data/beacons"
 ):
     """ this will take some time and will take up over 270 MB """
@@ -237,7 +238,7 @@ def download_from_beaconlist(
     timestamp = datetime.now().strftime("%Y%m%d-%H%M")
     #out_dir = Path(f"data/beacons_{timestamp}")
 
-    beacon_list = load_beacon_list()
+    beacon_list = load_beacon_list(beaconlist_location)
     print("Loaded beacon list:", len(beacon_list), "entries")
 
     all_metadata = []

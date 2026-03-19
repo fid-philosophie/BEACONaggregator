@@ -8,6 +8,7 @@ import re
 import duckdb
 import pandas as pd
 import pyarrow.parquet as pq
+import argparse
 
 from pathlib import Path
 from datetime import datetime
@@ -18,11 +19,13 @@ from handle_parquets import inspect_parquet_with_duckdb, qident, look_into_parqu
 from helpers import make_safe_prefix, analyze_json_path_uniqueness
 from beacons import download_beacon_file, parse_beacon_file, load_beacon_list, collect_beacons_to_dataframe, iter_beacon_dataframes, EXPECTED_COLUMNS, download_from_beaconlist
 
+# BEACONlist default folder (if used with --pick)
+BEACONLIST_DIR = Path("data/beaconlist")
 
 def add_contains_matches_and_dump_json(
     df: pd.DataFrame,
     parquet_paths: list[str | Path],
-    out_dir: str | Path = "data/beaconlist",
+    out_dir: str | Path = "data/beaconlist_matches",
     out_name: str | None = None,
     batch_size: int = 200_000,
     regex_chunk_size: int = 500,
@@ -464,7 +467,62 @@ def make_inspectable_jsons_from_parquets(parquet_paths):
         )
         print(f"Wrote JSON samples: {json_path}")
 
-def main_pipeline():
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Run aggregation pipeline"
+    )
+
+    parser.add_argument(
+        "-b",
+        "--beaconlist",
+        type=str,
+        help="Path or URL to beacon list (optional)",
+        default=None,
+    )
+
+    parser.add_argument(
+        "--pick",
+        action="store_true",
+        help="Interactively pick a beacon list from BEACONLIST_DIR",
+    )
+
+    return parser.parse_args()
+
+
+
+def pick_beaconlist() -> str:
+    files = sorted([f for f in BEACONLIST_DIR.iterdir() if f.is_file()])
+
+    if not files:
+        print(f"No files found in {BEACONLIST_DIR}")
+        sys.exit(0)  # graceful exit
+
+    print("Select a beacon list:\n")
+    for i, f in enumerate(files, start=1):
+        print(f"{i}: {f.name}")
+
+    while True:
+        choice = input("\nEnter number: ").strip()
+
+        if not choice.isdigit():
+            print("Please enter a valid number.")
+            continue
+
+        idx = int(choice) - 1
+        if 0 <= idx < len(files):
+            return str(files[idx])
+
+        print("Choice out of range.")
+
+
+def main_pipeline(beaconlist_location: str | None = None) -> None:
+    if beaconlist_location:
+        print(f"Using beacon list from: {beaconlist_location}")
+    else:
+        print("Using default beacon list")
+        
+    
     data_dir = Path("data")
     parquet_path = data_dir / "aggregations" / "beacons_20251212-1605.parquet"
     timestamp = datetime.now().strftime("%Y%m%d-%H%M")
@@ -493,12 +551,14 @@ def main_pipeline():
     parquet_dir = data_dir / "split_aggregations"
 
     
-    beacons_dir = Path(f"data/beacons_{timestamp}") # comment out, if see below
+    beacons_dir = Path(f"data/beacons/beacons_{timestamp}") # comment out, if see below
     #beacons_dir = Path(f"data/beacons/beacons_20251218-1754") # uncomment and set custom name => overwrite timestamped dir name, if needed
 
     # download each BEACON file into folder data/beacons/ (~270MB + takes some time)
     # cf. data/beacons/beacon_downloads_metadata.json
-    download_from_beaconlist(out_dir=beacons_dir)
+    #download_from_beaconlist(out_dir=beacons_dir)
+    #download_from_beaconlist(beaconlist_location=beaconlist_location, out_dir=beacons_dir)
+    download_from_beaconlist(beaconlist_location, beacons_dir)
 
     # beacons in 1 parquet umwandeln:
     parquet_path = beacons_to_parquet(beacons_dir=beacons_dir)
@@ -528,7 +588,7 @@ def main_pipeline():
     make_inspectable_jsons_from_parquets(parquet_withresolvedurls_paths)
 
     # get/load BEACONlist
-    beaconlist_json = load_beacon_list()
+    beaconlist_json = load_beacon_list(beaconlist_location)
     df_beaconlist = pd.DataFrame(beaconlist_json)
 
     # match BEACONlist with parquet splits (=> which BEACON uses which BEACON format variants)
@@ -539,11 +599,18 @@ def main_pipeline():
 
     # merge parquets into 1:
     merge_parquets(parquet_withresolvedurls_paths, merged_parquet_path)
+    
+    
 
+def main():
+    args = parse_args()
 
+    beaconlist_location = args.beaconlist
 
-def main() -> None:
-    main_pipeline() # memo: refactor!
+    if args.pick:
+        beaconlist_location = pick_beaconlist()
+
+    main_pipeline(beaconlist_location)
 
     #data_dir = Path("data")
     #analyze_parquet(data_dir / "merged" / "beacons_merged_20251216-1627.parquet")
