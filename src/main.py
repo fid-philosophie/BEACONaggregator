@@ -20,10 +20,7 @@ from handle_parquets import inspect_parquet_with_duckdb, qident, look_into_parqu
 from helpers import make_safe_prefix, analyze_json_path_uniqueness
 from beacons import download_beacon_file, parse_beacon_file, load_beacon_list, collect_beacons_to_dataframe, iter_beacon_dataframes, EXPECTED_COLUMNS, download_from_beaconlist
 
-# BEACONlist default folder (if used with --pick)
-BEACONLIST_DIR = Path("data/beaconlist")
-
-#BEACONLIST_DIR = Path("./beaconlists")
+BEACONLIST_DIR = Path("data/beaconlist") # BEACONlist default folder (if used with --pick)
 DOWNLOADED_BEACONS_BASE_DIR = Path("data/beacons")
 
 def add_contains_matches_and_dump_json(
@@ -127,7 +124,7 @@ def _dump_df_json(df: pd.DataFrame, out_dir: str | Path, out_name: str | None) -
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if out_name is None:
-        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        ts = datetime.now().strftime("%Y%m%d-%H%M")
         out_name = f"beacon_parquet_contains_matches_{ts}.json"
 
     out_path = out_dir / out_name
@@ -136,7 +133,7 @@ def _dump_df_json(df: pd.DataFrame, out_dir: str | Path, out_name: str | None) -
     return out_path
 
 def beacons_to_parquet(
-    beacons_dir: str | Path = "data/beacons",
+    beacons_dir: str,
     out_dir: str | Path = "data/aggregations",
     skip_suffixes: tuple[str, ...] = (".json",),
 ) -> Path:
@@ -591,22 +588,24 @@ def main_pipeline(
         beaconlist_location: str | None = None,
         beacons_dir: Path | None = None,
         ) -> None:
+    
+    
     if beaconlist_location:
-        print(f"Using beacon list from: {beaconlist_location}")
+        print(f"Using beaconlist from: {beaconlist_location}")
     else:
-        print("Using default beacon list")
+        # default list is on GitHub, cf. https://github.com/fid-philosophie/BEACONlist/blob/main/latest/BEACONlist.json
+        print("Using default beaconlist")
 
     if beaconlist_location:
         print(f"Using beacons_dir = {beacons_dir}")
     else:
+        # => Path(f"data/beacons/beacons_{timestamp}")
         print("Using new beacons_dir & will start fresh downloads")
     
     data_dir = Path("data")
-    #parquet_path = data_dir / "aggregations" / "beacons_20251212-1605.parquet"
     timestamp = datetime.now().strftime("%Y%m%d-%H%M")
     parquet_path = (data_dir / "aggregations" / f"beacons_{timestamp}.parquet")
     merged_parquet_path = (data_dir / "merged" / f"beacons_merged_{timestamp}.parquet")
-
 
     # list of parquet files the aggregation will be split into (= BEACON variants)
     parquet_toresolveurls_paths = [
@@ -626,22 +625,11 @@ def main_pipeline(
         "data/split_aggregations/target-notnull_col1-2-3_resolved.parquet",
     ]
 
-
     parquet_dir = data_dir / "split_aggregations"
 
     if not(beacons_dir):
         beacons_dir = Path(f"data/beacons/beacons_{timestamp}")
         download_from_beaconlist(beaconlist_location, beacons_dir)
-    #beacons_dir = Path(f"data/beacons/beacons_{timestamp}") # comment out, if see below
-    
-    #beacons_dir = Path(f"data/beacons/beacons_20251218-1754") # uncomment and set custom name => overwrite timestamped dir name, if needed
-
-    # download each BEACON file into folder data/beacons/ (~270MB + takes some time)
-    # cf. data/beacons/beacon_downloads_metadata.json
-    #download_from_beaconlist(out_dir=beacons_dir)
-    #download_from_beaconlist(beaconlist_location=beaconlist_location, out_dir=beacons_dir)
-    
-    #download_from_beaconlist(beaconlist_location, beacons_dir)
 
     # beacons in 1 parquet umwandeln:
     parquet_path = beacons_to_parquet(beacons_dir=beacons_dir)
@@ -701,94 +689,11 @@ def main():
     elif args.reuse_beacons:  # or args.pick_beacons_dir
         beacons_dir = pick_existing_beacons_dir()
 
+    # start main pipeline
     main_pipeline(
         beaconlist_location=beaconlist_location,
         beacons_dir=beacons_dir,
     )
-
-
-
-    #main_pipeline(beaconlist_location)
-
-    #data_dir = Path("data")
-    #analyze_parquet(data_dir / "merged" / "beacons_merged_20251216-1627.parquet")
-
-    #analyze_json_path_uniqueness("data/beacons/beacon_downloads_metadata.json")
-
-    # in_parquet = data_dir / "aggregations" / "beacons_20251215-2059.parquet"
-    # out_parquet = data_dir / "aggregations" / "beacons_20251215-2059_addedmeta.parquet"
-    # merged_parquet = data_dir / "merged" / "beacons_merged_20251216-1627.parquet"
-    # compare_parquet_row_counts(in_parquet, out_parquet, strict=True)
-
-    # print(count_parquet_rows(merged_parquet))
-
-    # data_dir = Path("data")
-    # parquet_path = data_dir / "aggregations" / "beacons_20251212-1605.parquet"
-    # merged_parquet_path = data_dir / "merged" / f"beacons_merged_{datetime.now().strftime("%Y%m%d-%H%M")}.parquet"
-
-    # # list of parquet files the aggregation will be split into (= BEACON variants)
-    # parquet_toresolveurls_paths = [
-    #     "data/split_aggregations/target-null_col1-2.parquet",
-    #     "data/split_aggregations/target-null_col1-2-3.parquet",
-    #     "data/split_aggregations/target-notnull_col1-only.parquet",
-    #     "data/split_aggregations/target-notnull_col1-2.parquet",
-    #     "data/split_aggregations/target-notnull_col1-2-3.parquet",
-    # ]
-
-    # # list of parquet files with resolved uris (e.g. repalced "{ID}" placeholders)
-    # parquet_withresolvedurls_paths = [
-    #     "data/split_aggregations/target-null_col1-2_resolved.parquet",
-    #     "data/split_aggregations/target-null_col1-2-3_resolved.parquet",
-    #     "data/split_aggregations/target-notnull_col1-only_resolved.parquet",
-    #     "data/split_aggregations/target-notnull_col1-2_resolved.parquet",
-    #     "data/split_aggregations/target-notnull_col1-2-3_resolved.parquet",
-    # ]
-
-
-    # parquet_dir = data_dir / "split_aggregations"
-
-    # # download each BEACON file into folder data/beacons/ (~270MB + takes some time)
-    # # cf. data/beacons/beacon_downloads_metadata.json
-    # download_from_beaconlist()
-
-    # # beacons in 1 parquet umwandeln:
-    # parquet_path = beacons_to_parquet()
-
-    # # parquet auswerten:
-    # #look_into_parquet(parquet_path)
-
-    # parquet_with_metadata_path = add_beacon_metadata_to_latest_parquet()
-    # print(parquet_with_metadata_path)
-
-    # # # split by target null/not null and col1-3:
-    # # split_parquet(parquet_path) 
-    # split_parquet(parquet_with_metadata_path) 
-
-    # # # # Point this to your directory with parquet files
-    # # # samples = sample_parquet_dir(parquet_dir)
-    # # # # `samples` is now a dict of DataFrames for quick exploration in Python:
-    # # # # e.g. see the sample for one file:
-    # # # samples["my_file.parquet"].head()
-
-    # # resolve urls for all types of beacons and create new parquets:
-    # create_resolved_parquets(parquet_toresolveurls_paths)
-    
-    # # make inspectable json files (with samples) from single parquets
-    # make_inspectable_jsons_from_parquets(parquet_withresolvedurls_paths)
-
-    # # get/load BEACONlist
-    # beaconlist_json = load_beacon_list()
-    # df_beaconlist = pd.DataFrame(beaconlist_json)
-
-    # # match BEACONlist with parquet splits (=> which BEACON uses which BEACON format variants)
-    # out_path = add_contains_matches_and_dump_json(df_beaconlist, parquet_withresolvedurls_paths)
-
-    # print(out_path)
-
-
-    # # merge parquets into 1:
-    # merge_parquets(parquet_withresolvedurls_paths, merged_parquet_path)
-
 
     # # Hagrid NDIF fields
     # # target_uri, normdata_uri, type, role, label, project, source_date, date_of_export
@@ -797,8 +702,6 @@ def main():
     # # ?
     # # target id ?
     # # authority id ? / source/reference/authority id?!
-
-
 
 
 if __name__ == "__main__":
