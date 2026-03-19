@@ -9,6 +9,7 @@ import duckdb
 import pandas as pd
 import pyarrow.parquet as pq
 import argparse
+import sys
 
 from pathlib import Path
 from datetime import datetime
@@ -21,6 +22,9 @@ from beacons import download_beacon_file, parse_beacon_file, load_beacon_list, c
 
 # BEACONlist default folder (if used with --pick)
 BEACONLIST_DIR = Path("data/beaconlist")
+
+#BEACONLIST_DIR = Path("./beaconlists")
+DOWNLOADED_BEACONS_BASE_DIR = Path("data/beacons")
 
 def add_contains_matches_and_dump_json(
     df: pd.DataFrame,
@@ -473,22 +477,40 @@ def parse_args():
         description="Run aggregation pipeline"
     )
 
-    parser.add_argument(
+    group_beaconlist = parser.add_mutually_exclusive_group()
+    group_beaconlist.title = "Beaconlist source"
+
+    group_beaconlist.add_argument(
         "-b",
         "--beaconlist",
         type=str,
-        help="Path or URL to beacon list (optional)",
-        default=None,
+        help="Path or URL to beacon list (optional)"
     )
 
-    parser.add_argument(
+    group_beaconlist.add_argument(
+        "-p",
         "--pick",
         action="store_true",
         help="Interactively pick a beacon list from BEACONLIST_DIR",
     )
 
-    return parser.parse_args()
+    group_beacons = parser.add_mutually_exclusive_group()
+    group_beacons.title = "Beacons directory source"
 
+    group_beacons.add_argument(
+        "-r",
+        "--reuse-beacons",
+        action="store_true",
+        help="Pick an existing beacons directory",
+    )
+
+    group_beacons.add_argument(
+        "--beacons-dir",
+        type=str,
+        help="Use a specific existing beacons directory",
+    )
+
+    return parser.parse_args()
 
 
 def pick_beaconlist() -> str:
@@ -516,16 +538,73 @@ def pick_beaconlist() -> str:
         print("Choice out of range.")
 
 
-def main_pipeline(beaconlist_location: str | None = None) -> None:
+def make_new_beacons_dir_path() -> Path:
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M")
+    return Path(f"data/beacons_{timestamp}")
+
+
+def pick_existing_beacons_dir() -> Path:
+    """
+    Pick an existing directory from data/beacons matching beacons_*.
+    If none exist, fall back to Path('data/beacons_{timestamp}').
+    """
+    if not DOWNLOADED_BEACONS_BASE_DIR.exists():
+        return make_new_beacons_dir_path()
+
+    dirs = sorted(
+        [
+            p for p in DOWNLOADED_BEACONS_BASE_DIR.iterdir()
+            if p.is_dir() and p.name.startswith("beacons_")
+        ],
+        reverse=True,  # newest-looking names first
+    )
+
+    if not dirs:
+        return make_new_beacons_dir_path()
+
+    print("Select an existing downloaded beacons directory:\n")
+    for i, d in enumerate(dirs, start=1):
+        print(f"{i}: {d.name}")
+
+    print("0: Create/use a new timestamped directory")
+
+    while True:
+        choice = input("\nEnter number: ").strip()
+
+        if not choice.isdigit():
+            print("Please enter a valid number.")
+            continue
+
+        idx = int(choice)
+
+        if idx == 0:
+            #return make_new_beacons_dir_path()
+            return None
+
+        if 1 <= idx <= len(dirs):
+            return dirs[idx - 1]
+
+        print("Choice out of range.")
+
+
+def main_pipeline(
+        beaconlist_location: str | None = None,
+        beacons_dir: Path | None = None,
+        ) -> None:
     if beaconlist_location:
         print(f"Using beacon list from: {beaconlist_location}")
     else:
         print("Using default beacon list")
-        
+
+    if beaconlist_location:
+        print(f"Using beacons_dir = {beacons_dir}")
+    else:
+        print("Using new beacons_dir & will start fresh downloads")
     
     data_dir = Path("data")
-    parquet_path = data_dir / "aggregations" / "beacons_20251212-1605.parquet"
+    #parquet_path = data_dir / "aggregations" / "beacons_20251212-1605.parquet"
     timestamp = datetime.now().strftime("%Y%m%d-%H%M")
+    parquet_path = (data_dir / "aggregations" / f"beacons_{timestamp}.parquet")
     merged_parquet_path = (data_dir / "merged" / f"beacons_merged_{timestamp}.parquet")
 
 
@@ -550,15 +629,19 @@ def main_pipeline(beaconlist_location: str | None = None) -> None:
 
     parquet_dir = data_dir / "split_aggregations"
 
+    if not(beacons_dir):
+        beacons_dir = Path(f"data/beacons/beacons_{timestamp}")
+        download_from_beaconlist(beaconlist_location, beacons_dir)
+    #beacons_dir = Path(f"data/beacons/beacons_{timestamp}") # comment out, if see below
     
-    beacons_dir = Path(f"data/beacons/beacons_{timestamp}") # comment out, if see below
     #beacons_dir = Path(f"data/beacons/beacons_20251218-1754") # uncomment and set custom name => overwrite timestamped dir name, if needed
 
     # download each BEACON file into folder data/beacons/ (~270MB + takes some time)
     # cf. data/beacons/beacon_downloads_metadata.json
     #download_from_beaconlist(out_dir=beacons_dir)
     #download_from_beaconlist(beaconlist_location=beaconlist_location, out_dir=beacons_dir)
-    download_from_beaconlist(beaconlist_location, beacons_dir)
+    
+    #download_from_beaconlist(beaconlist_location, beacons_dir)
 
     # beacons in 1 parquet umwandeln:
     parquet_path = beacons_to_parquet(beacons_dir=beacons_dir)
@@ -603,14 +686,29 @@ def main_pipeline(beaconlist_location: str | None = None) -> None:
     
 
 def main():
+
     args = parse_args()
 
+    # --- beaconlist ---
     beaconlist_location = args.beaconlist
-
     if args.pick:
         beaconlist_location = pick_beaconlist()
 
-    main_pipeline(beaconlist_location)
+    # --- beacons dir ---
+    beacons_dir = None
+    if args.beacons_dir:
+        beacons_dir = Path(args.beacons_dir)
+    elif args.reuse_beacons:  # or args.pick_beacons_dir
+        beacons_dir = pick_existing_beacons_dir()
+
+    main_pipeline(
+        beaconlist_location=beaconlist_location,
+        beacons_dir=beacons_dir,
+    )
+
+
+
+    #main_pipeline(beaconlist_location)
 
     #data_dir = Path("data")
     #analyze_parquet(data_dir / "merged" / "beacons_merged_20251216-1627.parquet")
