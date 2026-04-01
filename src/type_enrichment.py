@@ -63,24 +63,26 @@ def download_from_lobid(jsonl_file):
 def main():
     data_dir = Path("data")
     merged_dir = data_dir / "merged"
-    lobid_dump = data_dir / "lobid" 
-    Path.mkdir(lobid_dump, exist_ok=True)
-    lobid_dump = lobid_dump / "lobid-gnd.jsonl"
+    lobid_dump_dir = data_dir / "lobid"
+    Path.mkdir(lobid_dump_dir, exist_ok=True)
+    type_enrichtment_dir = data_dir / "type_enriched"
+    Path.mkdir(type_enrichtment_dir, exist_ok=True)
+    lobid_dump = lobid_dump_dir / "lobid-gnd.jsonl"
     
     # only download if file doesn't exists or file is older than one week:
     if not (lobid_dump.exists() and lobid_dump.is_file()) or lobid_dump.is_file() and time.time() - lobid_dump.stat().st_mtime  > 7 * 24 * 60 * 60:
         download_from_lobid(lobid_dump)
     else:
-        print(f"{lobid_dump} allready exists. Skipping download...")    
+        print(f"{lobid_dump} already exists. Skipping download...")    
 
-    timestamp = datetime.now().strftime("%Y%m%d")  
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M")  
 
 
     # Nimmt einfach das erste parquet im merged dir, das muss dann noch entsprechend angepasst werden..
     parquet_file = next(merged_dir.iterdir())
     
     # hier muss dann auch noch der pfad der ausgabe angepasst werden 
-    out_file = data_dir / f"beacon_with_types_{timestamp}.parquet"
+    out_file = type_enrichtment_dir / f"beacon_with_types_{timestamp}.parquet"
 
     con = duckdb.connect()
     con.execute("PRAGMA threads=8")
@@ -102,7 +104,7 @@ def main():
     WHERE authority_id IS NOT NULL
     """)
 
-    print("Found", con.execute("SELECT COUNT(*) FROM distinct_gnds").fetchall()[0][0], "different autority ids in", con.execute("SELECT COUNT(*) FROM records").fetchall()[0][0], "records.")
+    print("Found", con.execute("SELECT COUNT(*) FROM distinct_gnds").fetchall()[0][0], "different authority ids in", con.execute("SELECT COUNT(*) FROM records").fetchall()[0][0], "records.")
 
    
     con.execute("""
