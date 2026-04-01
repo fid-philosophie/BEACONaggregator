@@ -24,3 +24,6 @@ data/beaconlist/
 data/beacons/
 data/merged/
 data/lobid/lobid-gnd.jsonl
+data/beacons_*/
+data/type_enriched/
+.tmp/
