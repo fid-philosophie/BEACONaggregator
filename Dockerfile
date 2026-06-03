@@ -29,4 +29,5 @@ VOLUME ["/data"]
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
-ENTRYPOINT ["./entrypoint.sh"]
+ENTRYPOINT ["sh"]
+CMD ["./entrypoint.sh"]
