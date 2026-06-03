@@ -4,9 +4,16 @@
 #   docker compose build
 #   docker compose run --rm beaconaggregator
 #
-# Output lands in ./data/ on the host (timestamped subdirs created by the pipeline).
-# This file can also be referenced from a BEACONradar root compose that
-# runs both beaconlist and beaconaggregator sharing a common data volume.
+# Optional environment variables:
+#   BEACONLIST_SOURCE  – path or URL to a BEACONlist JSON file.
+#                        Defaults to the canonical GitHub URL.
+#                        Examples:
+#                          BEACONLIST_SOURCE=/data/beaconlist/BEACONlist.json  (local, bind-mounted)
+#                          BEACONLIST_SOURCE=https://example.org/custom.json   (remote)
+#   BEACONS_DIR        – path to an already-downloaded beacons directory.
+#                        Set this to skip the download step and re-use a previous run.
+#                        Example:
+#                          BEACONS_DIR=/data/beacons/beacons_20250101-1200
 
 services:
   beaconaggregator:
@@ -18,5 +25,9 @@ services:
       # Shared data dir. The pipeline writes beacons_<timestamp>/, aggregations/,
       # split_aggregations/, merged/ etc. here.
       - ./data:/data
-    # One-shot job, not a long-running service.
+    environment:
+      # Uncomment and set to override the default GitHub beaconlist:
+      # - BEACONLIST_SOURCE=/data/beaconlist/BEACONlist.json
+      # Uncomment to reuse a previously downloaded beacons directory:
+      # - BEACONS_DIR=/data/beacons/beacons_20250101-1200
     restart: "no"
