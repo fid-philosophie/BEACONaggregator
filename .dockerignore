@@ -1,0 +1,22 @@
+# Don't copy these into the image
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Data dirs are bind-mounted at runtime, not baked in
+data/
+
+# Notebooks are dev tools, not needed in the container
+notebooks/
+
+# Tests
+tests/
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*.swo
