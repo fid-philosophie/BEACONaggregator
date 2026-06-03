@@ -1,3 +1,6 @@
+# BEACONaggregator – runtime dependencies (pinned for reproducibility)
+# Python 3.11
+
 certifi==2025.11.12
 charset-normalizer==3.4.4
 duckdb==1.4.3
