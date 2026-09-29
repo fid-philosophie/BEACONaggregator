@@ -5,40 +5,34 @@ An aggregator using the output of https://github.com/fid-philosophie/BEACONlist
 
 ### activate venv
 #### Windows
-```bash
+```
 python -m venv venv
 .\venv\Scripts\activate
 ```
 
 #### Linux/macOS
-```bash
+```
 python3 -m venv venv
 source venv/bin/activate
 ```
 
 ### install packages
-```bash
+```
 pip install -r requirements.txt
 ```
 
 ### run main.py from src/:
-```bash
+```
 cd src
 python main.py
 ```
 
 #### options
-```bash
+```
 python main.py --beaconlist <path or URL>   # use a local file or custom URL instead of the default GitHub source
 python main.py --beacons-dir <path>         # skip download and reuse an existing beacons directory
 python main.py --pick                       # interactively pick a beaconlist from data/beaconlist/
 python main.py --reuse-beacons              # interactively pick an existing beacons directory
-```
-
-### run type_enrichment
-
-```bash
-python type_enrichment.py
 ```
 
 ---

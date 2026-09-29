@@ -14,14 +14,6 @@
 #                        Set this to skip the download step and re-use a previous run.
 #                        Example:
 #                          BEACONS_DIR=/data/beacons/beacons_20250101-1200
-#   UID / GID          – host user and group the container runs as (default: 1000:1000).
-#                        Bash does not export UID and does not set GID at all, so to use
-#                        other values, export them or put them in a .env file next to this one.
-#
-# Note on file ownership:
-#   Without a `user:` entry the container runs as root, and everything it writes to ./data
-#   (including ./data itself, if Docker has to create it) ends up owned by root:root on the host.
-#   To fix an existing data dir:  sudo chown -R "$(id -u):$(id -g)" data
 
 services:
   beaconaggregator:
@@ -29,20 +21,11 @@ services:
       context: .
       dockerfile: Dockerfile
     image: beaconaggregator:latest
-    # Run as the host user so files written to ./data stay owned by you, not root.
-    # If the pipeline needs to write anywhere inside the image at runtime (e.g. /app),
-    # that path must be made writable for this user in the Dockerfile.
-    user: "${UID:-1000}:${GID:-1000}"
     volumes:
       # Shared data dir. The pipeline writes beacons_<timestamp>/, aggregations/,
       # split_aggregations/, merged/ etc. here.
       - ./data:/data
     environment:
-      # Timestamps in output names (beacons_<timestamp>/ etc.) use local time instead of UTC.
-      # Requires tzdata in the image; without it, times silently stay in UTC.
-      - TZ=Europe/Berlin
-      # Writable home for tools that store caches or config there (the non-root user has none).
-      - HOME=/tmp
       # Uncomment and set to override the default GitHub beaconlist:
       # - BEACONLIST_SOURCE=/data/beaconlist/BEACONlist.json
       # Uncomment to reuse a previously downloaded beacons directory:
