@@ -81,7 +81,7 @@ def main():
     parquet_file = sorted(merged_dir.glob("*.parquet"))[-1] # die letzte (alphabetisch sortiert die neueste) .parquet Datei wählen
     
     # hier muss dann auch noch der pfad der ausgabe angepasst werden 
-    out_file = data_dir / f"beacon_with_types_{timestamp}.parquet"
+    out_file = data_dir / f"enriched" / f"beacon_with_types_{timestamp}.parquet"
 
     con = duckdb.connect()
     con.execute("PRAGMA threads=8")
@@ -197,6 +197,10 @@ def main():
     COUNT(*) - COUNT(gnd_type) AS unmatched
     FROM final
     """).df(), "\n")
+
+
+    #### make sure out_file folders/path exist or mkdir them:
+    out_file.parent.mkdir(parents=True, exist_ok=True)
 
 
     ########### file output:
