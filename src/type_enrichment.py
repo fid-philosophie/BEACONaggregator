@@ -77,7 +77,8 @@ def main():
 
 
     # Nimmt einfach das erste parquet im merged dir, das muss dann noch entsprechend angepasst werden..
-    parquet_file = next(merged_dir.iterdir())
+    #parquet_file = next(merged_dir.iterdir())
+    parquet_file = sorted(merged_dir.glob("*.parquet"))[-1] # die letzte (alphabetisch sortiert die neueste) .parquet Datei wählen
     
     # hier muss dann auch noch der pfad der ausgabe angepasst werden 
     out_file = data_dir / f"beacon_with_types_{timestamp}.parquet"
